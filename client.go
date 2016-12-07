@@ -16,9 +16,9 @@ import (
 
 	trace "code.cloudfoundry.org/trace-logger"
 	"github.com/dgrijalva/jwt-go"
+	"github.com/uber-go/zap"
 
 	"code.cloudfoundry.org/clock"
-	"code.cloudfoundry.org/lager"
 
 	"code.cloudfoundry.org/uaa-go-client/config"
 	"code.cloudfoundry.org/uaa-go-client/schema"
@@ -45,13 +45,13 @@ type UaaClient struct {
 	cachedToken      *schema.Token
 	refetchTokenTime int64
 	lock             *sync.Mutex
-	logger           lager.Logger
+	logger           zap.Logger
 	uaaPublicKey     string
 	rwlock           sync.RWMutex
 }
 
-func NewClient(logger lager.Logger, cfg *config.Config, clock clock.Clock) (Client, error) {
-	logger.Session("uaa-client")
+func NewClient(logger zap.Logger, cfg *config.Config, clock clock.Clock) (Client, error) {
+	//logger.Session("uaa-client")
 	var (
 		client *http.Client
 		err    error
@@ -78,7 +78,7 @@ func NewClient(logger lager.Logger, cfg *config.Config, clock clock.Clock) (Clie
 
 	if cfg.ExpirationBufferInSec < 0 {
 		cfg.ExpirationBufferInSec = config.DefaultExpirationBufferInSec
-		logger.Info("Expiration buffer in seconds set to default", lager.Data{"value": config.DefaultExpirationBufferInSec})
+		logger.Info("Expiration buffer in seconds set to default", zap.Int("value", config.DefaultExpirationBufferInSec))
 	}
 
 	return &UaaClient{
@@ -114,9 +114,10 @@ func newSecureClient(cfg *config.Config) (*http.Client, error) {
 }
 
 func (u *UaaClient) FetchToken(forceUpdate bool) (*schema.Token, error) {
-	logger := u.logger.Session("uaa-client")
+	//logger := u.logger.Session("uaa-client")
+	logger := u.logger
 	tokenURL := fmt.Sprintf("%s/oauth/token", u.config.UaaEndpoint)
-	logger.Debug("started-fetching-token", lager.Data{"endpoint": tokenURL, "force-update": forceUpdate})
+	logger.Debug("started-fetching-token", zap.String("endpoint", tokenURL), zap.Bool("force-update", forceUpdate))
 
 	if err := u.config.CheckCredentials(); err != nil {
 		return nil, err
@@ -141,11 +142,11 @@ func (u *UaaClient) FetchToken(forceUpdate bool) (*schema.Token, error) {
 		}
 
 		if err != nil {
-			logger.Error("error-fetching-token", err)
+			logger.Error("error-fetching-token", zap.Error(err))
 		}
 
 		if retry && retryCount < u.config.MaxNumberOfRetries {
-			logger.Debug("retry-fetching-token", lager.Data{"retry-count": retryCount})
+			logger.Debug("retry-fetching-token", zap.Int("retry-count", int(retryCount)))
 			retryCount++
 			u.clock.Sleep(u.config.RetryInterval)
 			continue
@@ -160,7 +161,8 @@ func (u *UaaClient) FetchToken(forceUpdate bool) (*schema.Token, error) {
 }
 
 func (u *UaaClient) doFetchToken() (*schema.Token, bool, error) {
-	logger := u.logger.Session("uaa-client")
+	//logger := u.logger.Session("uaa-client")
+	logger := u.logger
 	values := url.Values{}
 	values.Add("grant_type", "client_credentials")
 	requestBody := values.Encode()
@@ -175,7 +177,7 @@ func (u *UaaClient) doFetchToken() (*schema.Token, bool, error) {
 	request.Header.Add("Accept", "application/json; charset=utf-8")
 	trace.DumpRequest(request)
 
-	logger.Info("fetch-token-from-uaa-start", lager.Data{"endpoint": request.URL})
+	logger.Info("fetch-token-from-uaa-start", zap.String("endpoint", request.URL.String()))
 	resp, err := u.client.Do(request)
 	if err != nil {
 		return nil, true, err
@@ -183,7 +185,7 @@ func (u *UaaClient) doFetchToken() (*schema.Token, bool, error) {
 	defer resp.Body.Close()
 
 	trace.DumpResponse(resp)
-	logger.Info("fetch-token-from-uaa-end", lager.Data{"status-code": resp.StatusCode})
+	logger.Info("fetch-token-from-uaa-end", zap.Int("status-code", resp.StatusCode))
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -207,10 +209,11 @@ func (u *UaaClient) doFetchToken() (*schema.Token, bool, error) {
 }
 
 func (u *UaaClient) FetchKey() (string, error) {
-	logger := u.logger.Session("uaa-client")
+	//logger := u.logger.Session("uaa-client")
+	logger := u.logger
 	getKeyUrl := fmt.Sprintf("%s/token_key", u.config.UaaEndpoint)
 
-	logger.Info("fetch-key-starting", lager.Data{"endpoint": getKeyUrl})
+	logger.Info("fetch-key-starting", zap.String("endpoint", getKeyUrl))
 
 	resp, err := u.client.Get(getKeyUrl)
 	if err != nil {
@@ -243,7 +246,8 @@ func (u *UaaClient) FetchKey() (string, error) {
 }
 
 func (u *UaaClient) DecodeToken(uaaToken string, desiredPermissions ...string) error {
-	logger := u.logger.Session("uaa-client")
+	//logger := u.logger.Session("uaa-client")
+	logger := u.logger
 	logger.Debug("decode-token-started")
 	defer logger.Debug("decode-token-completed")
 	var err error
@@ -266,7 +270,7 @@ func (u *UaaClient) DecodeToken(uaaToken string, desiredPermissions ...string) e
 			})
 
 			if err != nil {
-				logger.Error("decode-token-failed", err)
+				logger.Error("decode-token-failed", zap.Error(err))
 				if matchesError(err, jwt.ValidationErrorSignatureInvalid) {
 					forceUaaKeyFetch = true
 					continue
@@ -386,7 +390,7 @@ func matchesError(err error, errorType uint32) bool {
 	return false
 }
 
-func (u *UaaClient) getUaaTokenKey(logger lager.Logger, forceFetch bool) (string, error) {
+func (u *UaaClient) getUaaTokenKey(logger zap.Logger, forceFetch bool) (string, error) {
 	if u.getUaaPublicKey() == "" || forceFetch {
 		logger.Debug("fetching-new-uaa-key")
 		key, err := u.FetchKey()
